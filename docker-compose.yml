@@ -8,6 +8,8 @@ x-node: &node
     PROVIDER_B_URL: http://provider-b:4000
     ADMIN_TOKEN: ${ADMIN_TOKEN:-admin-token}
     PROVIDER_TIMEOUT_MS: ${PROVIDER_TIMEOUT_MS:-2000}
+    MAX_DELIVERY_ATTEMPTS: ${MAX_DELIVERY_ATTEMPTS:-5}
+    LOG_LEVEL: ${LOG_LEVEL:-info}
   volumes:
     # bind-mount кода: правки видны без пересборки образа
     - ./server:/app/server
@@ -63,7 +65,10 @@ services:
       STOCK_SLICE: 0:30
       ERROR_RATE: ${A_ERROR_RATE:-0.15}
       TIMEOUT_RATE: ${A_TIMEOUT_RATE:-0.1}
+      LATENCY_MS: ${PROVIDER_LATENCY_MS:-50}
+      MAX_HANG_MS: ${PROVIDER_MAX_HANG_MS:-60000}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-admin-token}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     ports: ['4001:4000']
 
   provider-b:
@@ -75,7 +80,10 @@ services:
       STOCK_SLICE: 30:50
       ERROR_RATE: ${B_ERROR_RATE:-0.15}
       TIMEOUT_RATE: ${B_TIMEOUT_RATE:-0.1}
+      LATENCY_MS: ${PROVIDER_LATENCY_MS:-50}
+      MAX_HANG_MS: ${PROVIDER_MAX_HANG_MS:-60000}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-admin-token}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     ports: ['4002:4000']
 
   web:
