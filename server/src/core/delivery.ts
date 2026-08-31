@@ -84,20 +84,38 @@ export async function runJob(job: Job): Promise<StepResult> {
   })
 
   if (outcome.kind === 'ok') {
-    return tx(async (client) => {
-      await lockOrder(client, job.order_id)
-      const { rowCount } = await client.query(
-        `insert into deliveries (order_id, provider, request_id, code)
-         values ($1, $2, $3, $4)
-         on conflict (order_id) do nothing`,
-        [job.order_id, job.provider, requestId, outcome.code],
-      )
-      await setStatus(client, job.order_id, 'delivered', null)
-      await dropJob(client, job.order_id)
-      // rowCount === 0 значит выдачу успел записать другой воркер. Второго кода
-      // при этом не появилось: request_id детерминирован, поставщик вернул тот же.
-      return rowCount ? 'delivered' : 'already_delivered'
-    })
+    try {
+      return await tx<StepResult>(async (client) => {
+        await lockOrder(client, job.order_id)
+        const { rowCount } = await client.query(
+          `insert into deliveries (order_id, provider, request_id, code)
+           values ($1, $2, $3, $4)
+           on conflict (order_id) do nothing`,
+          [job.order_id, job.provider, requestId, outcome.code],
+        )
+        await setStatus(client, job.order_id, 'delivered', null)
+        await dropJob(client, job.order_id)
+        // rowCount === 0 значит выдачу успел записать другой воркер. Второго кода
+        // при этом не появилось: request_id детерминирован, поставщик вернул тот же.
+        return rowCount ? 'delivered' : 'already_delivered'
+      })
+    } catch (err) {
+      if (!isDuplicateCode(err)) throw err
+      // Поставщик вернул код, который уже закреплён за другим заказом. Выдавать
+      // его второй раз нельзя — заказ уходит в восстановимое состояние.
+      return tx<StepResult>(async (client) => {
+        await lockOrder(client, job.order_id)
+        await setStatus(client, job.order_id, 'delivery_failed', 'duplicate_code_from_provider')
+        await client.query(
+          `update delivery_jobs
+              set locked_at = null, next_run_at = now() + interval '15 seconds',
+                  last_error = 'duplicate_code_from_provider'
+            where order_id = $1`,
+          [job.order_id],
+        )
+        return 'delivery_failed'
+      })
+    }
   }
 
   if (outcome.kind === 'out_of_stock') {
@@ -151,6 +169,13 @@ export async function runJob(job: Job): Promise<StepResult> {
     return 'retry'
   })
 }
+
+/** 23505 — нарушение уникальности; нас интересует только индекс по коду. */
+const isDuplicateCode = (err: unknown) =>
+  typeof err === 'object' &&
+  err !== null &&
+  (err as { code?: string }).code === '23505' &&
+  String((err as { constraint?: string }).constraint ?? '').includes('deliveries_code')
 
 const dropJob = (client: Client, orderId: string) =>
   client.query('delete from delivery_jobs where order_id = $1', [orderId])

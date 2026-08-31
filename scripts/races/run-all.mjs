@@ -15,6 +15,7 @@ const SCENARIOS = [
   '06-timeout-trap.mjs',
   '07-promo-limit.mjs',
   '08-chaos.mjs',
+  '09-payment-failed.mjs',
 ]
 
 const filters = process.argv.slice(2)

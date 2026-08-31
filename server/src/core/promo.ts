@@ -58,6 +58,25 @@ export async function reserve(client: Client, code: string, orderId: string, pri
 }
 
 /**
+ * Обратный захват промокода, когда отказ оплаты перекрыт пришедшим позже paid.
+ * @returns false, если лимит за это время выбрали другие заказы.
+ */
+export async function reclaim(client: Client, order: { id: string; promo_code: string | null }) {
+  if (!order.promo_code) return true
+  const { rowCount } = await client.query(
+    `update promocodes set used_count = used_count + 1
+      where code = $1 and used_count < max_uses`,
+    [order.promo_code],
+  )
+  if (!rowCount) return false
+  await client.query(
+    'insert into promo_uses (order_id, code) values ($1, $2) on conflict (order_id) do nothing',
+    [order.id, order.promo_code],
+  )
+  return true
+}
+
+/**
  * Возврат промокода, если оплата не прошла. Вызывается ровно один раз —
  * из перехода created → payment_failed, который сам защищён проверкой статуса.
  */

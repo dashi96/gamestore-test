@@ -80,15 +80,24 @@ export async function processEvent(client: Client, event: EventRow): Promise<boo
       await setStatus(client, order.id, 'payment_failed', 'webhook_failed')
       note = 'payment_failed'
     }
-  } else if (order.status === 'created') {
+  } else if (order.status === 'created' || order.status === 'payment_failed') {
+    // payment_failed здесь не опечатка: вебхуки приходят не по порядку, и
+    // последовательность failed → paid реальна. Деньги пришли — товар надо
+    // выдать, поэтому paid перебивает ранее записанный отказ.
     const expected = order.total_rub
     if (event.amount_rub !== null && event.amount_rub !== expected) {
       // Сумму считает сервер; платить меньше, чем в заказе, нельзя.
       note = `amount_mismatch:${event.amount_rub}!=${expected}`
     } else {
-      await setStatus(client, order.id, 'paid', null)
+      const revived = order.status === 'payment_failed'
+      // Промокод был возвращён в лимит при отказе — забираем его обратно.
+      // Если лимит успели выбрать другие, заказ всё равно выдаётся по своей
+      // зафиксированной сумме: обязательство перед оплатившим клиентом важнее
+      // счётчика промокода, а расхождение остаётся в status_reason.
+      const promoBack = revived && order.promo_code ? await promo.reclaim(client, order) : true
+      await setStatus(client, order.id, 'paid', promoBack ? null : 'promo_limit_exceeded_on_revival')
       await enqueueDelivery(client, order.id)
-      note = 'paid'
+      note = revived ? 'paid_after_failed' : 'paid'
     }
   }
   // Все прочие статусы (paid/delivering/delivered/...) — заказ уже дальше по
