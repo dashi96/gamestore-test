@@ -10,8 +10,7 @@
     "provider": "tsx watch provider-stub/src/index.ts",
     "migrate": "tsx server/src/migrate.ts",
     "races": "node scripts/races/run-all.mjs",
-    "typecheck": "tsc --noEmit",
-    "assets": "node scripts/extract-assets.mjs"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "fastify": "^5.2.1",
