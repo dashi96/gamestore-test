@@ -4,3 +4,7 @@ node_modules/
 *.log
 .DS_Store
 .idea/
+
+# Исходники заказчика: макет и текст ТЗ — в репозиторий не кладём
+design/
+docs/
