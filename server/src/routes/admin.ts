@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { config, type ProviderId } from '../lib/config.ts'
-import { pool } from '../lib/db.ts'
+import { pool, tx } from '../lib/db.ts'
 import { ApiError, badRequest } from '../lib/errors.ts'
 import { requestRedelivery } from '../core/delivery.ts'
 import { adminFetch } from '../core/providers.ts'
@@ -103,8 +103,12 @@ export async function adminRoutes(app: FastifyInstance) {
 
   /** Сброс состояния между прогонами скриптов гонок. */
   app.post('/admin/reset', async () => {
-    await pool.query('truncate promo_uses, deliveries, delivery_jobs, payment_events, orders cascade')
-    await pool.query('update promocodes set used_count = 0')
+    // Очистка и сброс счётчиков — одной транзакцией: между ними не должно быть
+    // момента, когда заказов уже нет, а промокоды числятся израсходованными.
+    await tx(async (client) => {
+      await client.query('truncate promo_uses, deliveries, delivery_jobs, payment_events, orders cascade')
+      await client.query('update promocodes set used_count = 0')
+    })
     const [a, b] = await Promise.all([
       adminFetch('a', '/admin/reset', { method: 'POST' }),
       adminFetch('b', '/admin/reset', { method: 'POST' }),
