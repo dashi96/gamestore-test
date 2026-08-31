@@ -32,8 +32,10 @@ export async function run() {
     ),
   )
 
+  // Ждём долго намеренно: при таких долях отказов часть заказов успевает
+  // побывать в delivery_failed и восстановиться сама, без вмешательства.
   const settled = await Promise.all(
-    orders.map(({ body }) => waitForStatus(body.id, ['delivered'], 90_000)),
+    orders.map(({ body }) => waitForStatus(body.id, ['delivered'], 180_000)),
   )
 
   const codes = new Set(settled.map((o) => o.delivery.code))

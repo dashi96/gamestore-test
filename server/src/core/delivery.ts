@@ -132,8 +132,10 @@ export async function runJob(job: Job): Promise<StepResult> {
   // не дошёл. Повторяем к нему же с тем же request_id — вернётся тот же код.
   return tx(async (client) => {
     await lockOrder(client, job.order_id)
+    // Исчерпав попытки, заказ помечается восстановимым, но повторы не
+    // прекращаются: поставщик может ожить сам, без ручного вмешательства.
     const exhausted = job.attempts >= config.maxDeliveryAttempts
-    const backoffSec = exhausted ? 30 : Math.min(2 ** job.attempts, 15)
+    const backoffSec = Math.min(2 ** job.attempts, 15)
     await client.query(
       `update delivery_jobs
           set locked_at = null,
