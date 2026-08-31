@@ -1,0 +1,103 @@
+name: gamestore
+
+x-node: &node
+  build: .
+  environment:
+    DATABASE_URL: postgres://shop:shop@db:5432/shop
+    PROVIDER_A_URL: http://provider-a:4000
+    PROVIDER_B_URL: http://provider-b:4000
+    ADMIN_TOKEN: ${ADMIN_TOKEN:-admin-token}
+    PROVIDER_TIMEOUT_MS: ${PROVIDER_TIMEOUT_MS:-2000}
+  volumes:
+    # bind-mount кода: правки видны без пересборки образа
+    - ./server:/app/server
+    - ./provider-stub:/app/provider-stub
+    - ./migrations:/app/migrations
+    - ./scripts:/app/scripts
+    - ./data:/app/data
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shop
+      POSTGRES_PASSWORD: shop
+      POSTGRES_DB: shop
+    # порт наружу — чтобы можно было заглянуть psql'ем, приложению он не нужен
+    ports: ['5433:5432']
+    volumes: ['db-data:/var/lib/postgresql/data']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U shop -d shop']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # Одноразовый: миграции + сиды. Все остальные ждут его успешного завершения.
+  migrate:
+    <<: *node
+    command: npx tsx server/src/migrate.ts
+    depends_on:
+      db: { condition: service_healthy }
+
+  api:
+    <<: *node
+    command: npx tsx watch server/src/index.ts
+    ports: ['3000:3000']
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  # Портов нет специально: docker compose up --scale worker=3 поднимает
+  # три конкурирующих воркера, выдача от этого не задваивается.
+  worker:
+    <<: *node
+    command: npx tsx watch server/src/worker.ts
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  provider-a:
+    <<: *node
+    command: npx tsx watch provider-stub/src/index.ts
+    environment:
+      PROVIDER_ID: a
+      PORT: 4000
+      STOCK_SLICE: 0:30
+      ERROR_RATE: ${A_ERROR_RATE:-0.15}
+      TIMEOUT_RATE: ${A_TIMEOUT_RATE:-0.1}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-admin-token}
+    ports: ['4001:4000']
+
+  provider-b:
+    <<: *node
+    command: npx tsx watch provider-stub/src/index.ts
+    environment:
+      PROVIDER_ID: b
+      PORT: 4000
+      STOCK_SLICE: 30:50
+      ERROR_RATE: ${B_ERROR_RATE:-0.15}
+      TIMEOUT_RATE: ${B_TIMEOUT_RATE:-0.1}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-admin-token}
+    ports: ['4002:4000']
+
+  web:
+    image: nginx:alpine
+    ports: ['8080:80']
+    volumes:
+      - ./web:/usr/share/nginx/html:ro
+      - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on: [api]
+
+  # Проверка гонок. Не поднимается вместе с остальными — только по команде:
+  #   docker compose run --rm races
+  races:
+    <<: *node
+    profiles: [tools]
+    command: node scripts/races/run-all.mjs
+    environment:
+      API_URL: http://api:3000
+      PROVIDER_A_URL: http://provider-a:4000
+      PROVIDER_B_URL: http://provider-b:4000
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-admin-token}
+    depends_on: [api]
+
+volumes:
+  db-data:

@@ -1,0 +1,6 @@
+node_modules/
+.fig-unpack/
+.env
+*.log
+.DS_Store
+.idea/

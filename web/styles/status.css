@@ -1,0 +1,150 @@
+/* Страница заказа и админка: рабочий вид без дизайна, как и просили в ТЗ. */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  margin: 12px 0;
+}
+
+.panel h1 {
+  font-size: 20px;
+  margin: 0 0 4px;
+}
+
+.panel h2 {
+  font-size: 15px;
+  margin: 0 0 12px;
+}
+
+.muted {
+  color: var(--ink-muted);
+}
+
+.rows {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-weight: 600;
+  font-size: 13px;
+  background: var(--surface-muted);
+}
+
+.status[data-status='delivered'] { background: #e7f6ec; color: #1e7a3a; }
+.status[data-status='paid'],
+.status[data-status='delivering'] { background: #e8f0fe; color: #2255c4; }
+.status[data-status='created'] { background: var(--surface-muted); color: var(--ink-muted); }
+.status[data-status='out_of_stock'],
+.status[data-status='delivery_failed'] { background: #fdf1e3; color: #a75d0c; }
+.status[data-status='payment_failed'] { background: #fdeaea; color: #a92626; }
+
+.status::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status[data-status='delivering']::before,
+.status[data-status='paid']::before {
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  50% { opacity: 0.25; }
+}
+
+.code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 22px;
+  letter-spacing: 0.06em;
+  background: var(--surface-muted);
+  border-radius: var(--radius);
+  padding: 16px;
+  text-align: center;
+  user-select: all;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+th {
+  color: var(--ink-muted);
+  font-weight: 500;
+}
+
+td.wrap {
+  white-space: normal;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.kv {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px 0;
+  font-size: 13px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0 4px;
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.topbar .spacer {
+  flex: 1;
+}
+
+@media (max-width: 700px) {
+  .grid-2 { grid-template-columns: 1fr; }
+}

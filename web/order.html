@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Заказ — Магазин цифровых товаров</title>
+    <link rel="stylesheet" href="styles/base.css" />
+    <link rel="stylesheet" href="styles/shop.css" />
+    <link rel="stylesheet" href="styles/status.css" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="topbar">
+        <a class="btn-ghost" href="index.html">← В магазин</a>
+        <div class="spacer"></div>
+        <a class="btn-ghost" href="admin.html">Админка</a>
+      </div>
+
+      <section class="panel" id="order-panel">
+        <p class="muted">Загружаем заказ…</p>
+      </section>
+
+      <section class="panel">
+        <h2>Оплата (заглушка)</h2>
+        <p class="muted">
+          Реального эквайринга нет. Кнопки отправляют вебхук по контракту на
+          <code>POST /webhook/payment</code> — тот же путь, которым пользуется проверка гонок.
+        </p>
+        <div class="actions">
+          <button class="btn-primary" id="pay-success">Оплатить: успех</button>
+          <button class="btn-ghost" id="pay-failure">Оплатить: неуспех</button>
+          <button class="btn-ghost" id="pay-storm">Отправить вебхук 50× параллельно</button>
+        </div>
+        <div class="rows" id="pay-log"></div>
+      </section>
+    </div>
+
+    <div class="toasts" id="toasts"></div>
+    <script type="module" src="js/order.js"></script>
+  </body>
+</html>

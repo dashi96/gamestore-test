@@ -1,0 +1,26 @@
+{
+  "name": "gamestore-test",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "api": "tsx watch server/src/index.ts",
+    "worker": "tsx watch server/src/worker.ts",
+    "provider": "tsx watch provider-stub/src/index.ts",
+    "migrate": "tsx server/src/migrate.ts",
+    "races": "node scripts/races/run-all.mjs",
+    "typecheck": "tsc --noEmit",
+    "assets": "node scripts/extract-assets.mjs"
+  },
+  "dependencies": {
+    "fastify": "^5.2.1",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

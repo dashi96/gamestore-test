@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Админка — выдача и поставщики</title>
+    <link rel="stylesheet" href="styles/base.css" />
+    <link rel="stylesheet" href="styles/shop.css" />
+    <link rel="stylesheet" href="styles/status.css" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="topbar">
+        <a class="btn-ghost" href="index.html">← В магазин</a>
+        <h1>Админка</h1>
+        <div class="spacer"></div>
+        <label class="field" style="min-height:auto; padding:6px 10px">
+          <span class="field__label">Токен</span>
+          <input id="token" value="admin-token" size="14" />
+        </label>
+      </div>
+
+      <section class="panel">
+        <h2>Оплачен, но не выдан</h2>
+        <p class="muted">
+          Заказы в состояниях <code>paid</code>, <code>delivering</code>, <code>out_of_stock</code>,
+          <code>delivery_failed</code>, по которым ещё нет факта выдачи.
+          Повторная выдача идемпотентна: если код уже выдан, второе нажатие ничего не изменит.
+        </p>
+        <div style="overflow-x:auto"><table id="orders"></table></div>
+      </section>
+
+      <div class="grid-2">
+        <section class="panel">
+          <h2>Поставщики</h2>
+          <p class="muted">Доля отказов и таймаутов настраивается на лету — так воспроизводятся сбои.</p>
+          <div id="providers"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Состояние системы</h2>
+          <div id="stats"></div>
+          <div class="actions">
+            <button class="btn-ghost" id="reset">Сбросить всё состояние</button>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div class="toasts" id="toasts"></div>
+    <script type="module" src="js/admin.js"></script>
+  </body>
+</html>
