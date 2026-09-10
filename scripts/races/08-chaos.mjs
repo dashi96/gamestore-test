@@ -1,4 +1,4 @@
-import { checker, createOrder, keysConsumed, reset, setProvider, stats, uid, waitForStatus, webhook } from './lib.mjs'
+import { checker, createOrder, ensureStock, keysConsumed, reset, setProvider, stats, uid, waitForStatus, webhook } from './lib.mjs'
 
 export const name = 'Хаос: 10 заказов параллельно при 50% ошибок и 30% таймаутов у обоих поставщиков'
 
@@ -7,6 +7,8 @@ const ORDERS = 10
 export async function run() {
   const c = checker()
   await reset()
+  // Сценарий про устойчивость выдачи: запас склада не должен на него влиять.
+  await ensureStock('KEY-GTA5', ORDERS * 2)
   await Promise.all([
     setProvider('a', { errorRate: 0.5, timeoutRate: 0.3, latencyMs: 20 }),
     setProvider('b', { errorRate: 0.5, timeoutRate: 0.3, latencyMs: 20 }),

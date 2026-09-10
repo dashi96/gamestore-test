@@ -30,7 +30,10 @@ export async function run() {
 
   const reused = await createOrder('KEY-GTA5', { key: uid('reuse'), promo: 'ONCEONLY' })
   c.eq('после отказа оплаты промокод снова доступен', reused.status, 201)
-  c.eq('и скидка та же', reused.body.discount_rub, 995)
+  // Не «та же цифра», а то же правило: заказы могли уйти к разным продавцам с
+  // разными ценами, а проверяется здесь именно возврат промокода в лимит.
+  c.eq('и скидка снова посчитана по тому же правилу',
+    reused.body.discount_rub, Math.floor(reused.body.amount_rub * 0.5))
 
   // Повтор того же события ничего не меняет и не возвращает промокод дважды.
   const repeat = await send(first, 'failed', failEvent)

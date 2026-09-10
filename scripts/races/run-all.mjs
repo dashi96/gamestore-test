@@ -16,7 +16,18 @@ const SCENARIOS = [
   '07-promo-limit.mjs',
   '08-chaos.mjs',
   '09-payment-failed.mjs',
+  // Второй этап: живая витрина, гонка за последней единицей, бронь с таймером.
+  '10-last-unit.mjs',
+  '11-reservation-expiry.mjs',
+  '12-double-reserve.mjs',
+  '13-price-in-cart.mjs',
+  '15-late-payment.mjs',
+  '16-failed-then-paid.mjs',
+  '17-listener-drop.mjs',
 ]
+
+// 14 — «устаревшие ответы поиска» — живёт не здесь: это чистая логика без сети,
+// и проверяет её `npm test` (node --test), без браузера и без стенда.
 
 const filters = process.argv.slice(2)
 const selected = filters.length

@@ -1,4 +1,4 @@
-import { checker, createOrder, keysConsumed, providers, reset, setProvider, uid, waitForStatus, webhook } from './lib.mjs'
+import { checker, createOrder, ensureStock, keysConsumed, pickOffer, providers, reset, setProvider, uid, waitForStatus, webhook } from './lib.mjs'
 
 export const name = 'Ловушка таймаута и полный отказ поставщиков'
 
@@ -27,8 +27,13 @@ export async function run() {
   await setProvider('a', { errorRate: 0, timeoutRate: 1 })
   await setProvider('b', { errorRate: 0, timeoutRate: 0 })
 
+  // Код выдаёт поставщик продавца, а не всегда A. Сценарий про поведение A,
+  // поэтому продавца выбираем осознанно, а не отдаём на волю самой дешёвой цены.
+  await ensureStock('KEY-GTA5', 4)
+  const offer = await pickOffer('KEY-GTA5', { provider: 'a' })
+
   const before = await keysConsumed()
-  const order = (await createOrder('KEY-GTA5', { key: uid('trap') })).body
+  const order = (await createOrder(null, { key: uid('trap'), offerId: offer.id })).body
   await payFor(order)
 
   // Повтор идёт с тем же request_id, поставщик обязан вернуть тот же код —
@@ -51,7 +56,7 @@ export async function run() {
   await setProvider('b', { errorRate: 1, timeoutRate: 0 })
 
   const beforeFail = await keysConsumed()
-  const second = (await createOrder('KEY-GTA5', { key: uid('fail') })).body
+  const second = (await createOrder(null, { key: uid('fail'), offerId: offer.id })).body
   await payFor(second)
 
   const failed = await waitForStatus(second.id, ['delivery_failed'], 60_000)
