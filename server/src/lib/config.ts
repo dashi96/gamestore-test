@@ -14,6 +14,16 @@ export const config = {
   maxDeliveryAttempts: num(process.env.MAX_DELIVERY_ATTEMPTS, 5),
   /** Своё имя для вебхука платёжки-заглушки. */
   selfUrl: process.env.SELF_URL ?? `http://localhost:${num(process.env.PORT, 3000)}`,
+  /** Срок брони: столько времени товар держится за покупателем на оформлении. */
+  reservationTtlSec: num(process.env.RESERVATION_TTL_SEC, 420),
+  /**
+   * Потолок для заказа, ушедшего в оплату. Платёж в полёте не должен потерять
+   * товар из-за истёкшего отсчёта, но и запирать единицу навсегда зависший
+   * платёж не имеет права.
+   */
+  reservationHardTtlSec: num(process.env.RESERVATION_HARD_TTL_SEC, 1200),
+  /** Как часто воркер снимает просроченные брони. */
+  sweepIntervalMs: num(process.env.SWEEP_INTERVAL_MS, 250),
 }
 
 export type ProviderId = 'a' | 'b'

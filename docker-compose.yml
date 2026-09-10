@@ -2,6 +2,9 @@ name: gamestore
 
 x-node: &node
   build: .
+  # Общее имя образа: иначе compose собирает по образу на каждый сервис, и
+  # пересобрать один — значит оставить остальные на старых зависимостях.
+  image: gamestore-node
   environment:
     DATABASE_URL: postgres://shop:shop@db:5432/shop
     PROVIDER_A_URL: http://provider-a:4000
@@ -9,6 +12,9 @@ x-node: &node
     ADMIN_TOKEN: ${ADMIN_TOKEN:-admin-token}
     PROVIDER_TIMEOUT_MS: ${PROVIDER_TIMEOUT_MS:-2000}
     MAX_DELIVERY_ATTEMPTS: ${MAX_DELIVERY_ATTEMPTS:-5}
+    RESERVATION_TTL_SEC: ${RESERVATION_TTL_SEC:-420}
+    RESERVATION_HARD_TTL_SEC: ${RESERVATION_HARD_TTL_SEC:-1200}
+    SWEEP_INTERVAL_MS: ${SWEEP_INTERVAL_MS:-250}
     LOG_LEVEL: ${LOG_LEVEL:-info}
   volumes:
     # bind-mount кода: правки видны без пересборки образа
@@ -105,6 +111,8 @@ services:
       PROVIDER_A_URL: http://provider-a:4000
       PROVIDER_B_URL: http://provider-b:4000
       ADMIN_TOKEN: ${ADMIN_TOKEN:-admin-token}
+      # Часть сценариев проверяет саму схему и обрыв слушателя — им нужна база.
+      DATABASE_URL: postgres://shop:shop@db:5432/shop
     depends_on: [api]
 
 volumes:

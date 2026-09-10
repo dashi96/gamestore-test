@@ -1,9 +1,13 @@
+import { dropStale } from './core/cart.ts'
 import { claimJob, runJob } from './core/delivery.ts'
-import { processParked } from './core/payments.ts'
+import { processParked, recoverStuck } from './core/payments.ts'
+import { sweep } from './core/reservations.ts'
+import { config } from './lib/config.ts'
 import { pool, tx, waitForDb } from './lib/db.ts'
 
 const IDLE_MS = 200
 const PARKED_EVERY_MS = 1000
+const CART_SWEEP_MS = 60_000
 
 const workerId = process.env.HOSTNAME ?? String(process.pid)
 const log = (message: string, extra: Record<string, unknown> = {}) =>
@@ -45,6 +49,37 @@ async function parkedLoop() {
   }
 }
 
+/**
+ * Брони. Единственное место, которое возвращает единицы в продажу, и оно же
+ * добивает оплаченные заказы, которым при оплате не досталось товара.
+ */
+async function reservationLoop() {
+  while (running) {
+    try {
+      const released = await sweep()
+      if (released) log('reservations_released', { count: released })
+      const recovered = await recoverStuck()
+      if (recovered) log('stuck_orders_recovered', { count: recovered })
+    } catch (err) {
+      log('reservation_error', { error: String(err) })
+    }
+    await sleep(config.sweepIntervalMs)
+  }
+}
+
+/** Брошенные корзины. Таблица наполняется анонимным трафиком и сама не убывает. */
+async function cartLoop() {
+  while (running) {
+    try {
+      const dropped = await dropStale()
+      if (dropped) log('stale_cart_items_dropped', { count: dropped })
+    } catch (err) {
+      log('cart_error', { error: String(err) })
+    }
+    await sleep(CART_SWEEP_MS)
+  }
+}
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 await waitForDb()
@@ -58,4 +93,4 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   })
 }
 
-await Promise.all([deliveryLoop(), parkedLoop()])
+await Promise.all([deliveryLoop(), parkedLoop(), reservationLoop(), cartLoop()])

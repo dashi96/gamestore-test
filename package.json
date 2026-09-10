@@ -3,22 +3,28 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "api": "tsx watch server/src/index.ts",
     "worker": "tsx watch server/src/worker.ts",
     "provider": "tsx watch provider-stub/src/index.ts",
     "migrate": "tsx server/src/migrate.ts",
     "races": "node scripts/races/run-all.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"scripts/tests/*.test.mjs\""
   },
   "dependencies": {
+    "@fastify/websocket": "^11.3.0",
     "fastify": "^5.2.1",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
     "@types/pg": "^8.11.10",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   }

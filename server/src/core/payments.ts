@@ -1,8 +1,10 @@
 import type { Client } from '../lib/db.ts'
 import { pool, tx } from '../lib/db.ts'
 import { badRequest } from '../lib/errors.ts'
-import { lockOrder, setStatus } from './orders.ts'
+import * as events from './events.ts'
+import { lockOrder, setStatus, type Order, type OrderStatus } from './orders.ts'
 import * as promo from './promo.ts'
+import * as reservations from './reservations.ts'
 
 export type WebhookBody = {
   event_id: string
@@ -66,6 +68,16 @@ export async function handleWebhook(body: WebhookBody): Promise<HandleResult> {
   })
 }
 
+/**
+ * Статусы, из которых оплата ещё имеет смысл.
+ *
+ * `payment_failed` и `reservation_expired` здесь не опечатка: вебхуки приходят
+ * не по порядку, и последовательности failed → paid и «бронь сняли → пришла
+ * оплата» реальны. Деньги пришли — товар надо выдать, поэтому paid перебивает и
+ * ранее записанный отказ, и снятую бронь.
+ */
+const PAYABLE: OrderStatus[] = ['created', 'awaiting_payment', 'payment_failed', 'reservation_expired']
+
 /** @returns true — событие применено; false — заказа ещё нет, оставляем на потом. */
 export async function processEvent(client: Client, event: EventRow): Promise<boolean> {
   const order = await lockOrder(client, event.order_id)
@@ -75,29 +87,22 @@ export async function processEvent(client: Client, event: EventRow): Promise<boo
 
   if (event.status === 'failed') {
     // Оплата, пришедшая после успешной, не отменяет её: paid сильнее failed.
-    if (order.status === 'created') {
+    if (order.status === 'created' || order.status === 'awaiting_payment') {
       await promo.release(client, order.id)
+      // Товар возвращается в продажу сразу: держать его за неоплаченным заказом
+      // незачем, а пришедшее позже paid разберётся перезахватом.
+      const offerId = await reservations.release(client, order.id, 'payment_failed')
       await setStatus(client, order.id, 'payment_failed', 'webhook_failed')
+      if (offerId) await events.emit(client, offerId)
       note = 'payment_failed'
     }
-  } else if (order.status === 'created' || order.status === 'payment_failed') {
-    // payment_failed здесь не опечатка: вебхуки приходят не по порядку, и
-    // последовательность failed → paid реальна. Деньги пришли — товар надо
-    // выдать, поэтому paid перебивает ранее записанный отказ.
+  } else if (PAYABLE.includes(order.status)) {
     const expected = order.total_rub
     if (event.amount_rub !== null && event.amount_rub !== expected) {
       // Сумму считает сервер; платить меньше, чем в заказе, нельзя.
       note = `amount_mismatch:${event.amount_rub}!=${expected}`
     } else {
-      const revived = order.status === 'payment_failed'
-      // Промокод был возвращён в лимит при отказе — забираем его обратно.
-      // Если лимит успели выбрать другие, заказ всё равно выдаётся по своей
-      // зафиксированной сумме: обязательство перед оплатившим клиентом важнее
-      // счётчика промокода, а расхождение остаётся в status_reason.
-      const promoBack = revived && order.promo_code ? await promo.reclaim(client, order) : true
-      await setStatus(client, order.id, 'paid', promoBack ? null : 'promo_limit_exceeded_on_revival')
-      await enqueueDelivery(client, order.id)
-      note = revived ? 'paid_after_failed' : 'paid'
+      note = await settle(client, order)
     }
   }
   // Все прочие статусы (paid/delivering/delivered/...) — заказ уже дальше по
@@ -110,10 +115,49 @@ export async function processEvent(client: Client, event: EventRow): Promise<boo
   return true
 }
 
-/** Ставим заказ в очередь выдачи. Повторный вызов не создаёт вторую задачу. */
+/**
+ * Оплата принята: единица переходит из брони в продажу, заказ уходит в выдачу.
+ * Заказ уже под блокировкой строки.
+ */
+async function settle(client: Client, order: Order): Promise<string> {
+  const settled = await reservations.settlePaid(client, order)
+  if (!settled.ok) {
+    // Оплата пришла, а товара нет: бронь сняли, и свободных единиц не осталось.
+    // Состояние восстановимое — воркер повторит попытку, когда остаток пополнят.
+    await setStatus(client, order.id, 'out_of_stock', 'no_stock_on_late_payment')
+    return 'paid_no_stock'
+  }
+
+  const revived = order.status === 'payment_failed' || order.status === 'reservation_expired'
+  // Забрать промокод обратно можно только там, где его вернули в лимит, а
+  // возвращает его один-единственный переход — отказ оплаты. Истёкшая бронь
+  // промокод не трогает, поэтому после неё `reclaim` списал бы лимит второй раз
+  // за один заказ. Если лимит за это время выбрали другие, заказ всё равно
+  // выдаётся по своей зафиксированной сумме: обязательство перед оплатившим
+  // клиентом важнее счётчика промокода.
+  const promoBack =
+    order.status === 'payment_failed' && order.promo_code ? await promo.reclaim(client, order) : true
+
+  await setStatus(client, order.id, 'paid', promoBack ? null : 'promo_limit_exceeded_on_revival')
+  await enqueueDelivery(client, order.id)
+  await events.emit(client, settled.offerId)
+
+  if (settled.reclaimed) return 'paid_reclaimed'
+  return revived ? 'paid_after_failed' : 'paid'
+}
+
+/**
+ * Ставим заказ в очередь выдачи. Повторный вызов не создаёт вторую задачу.
+ * Поставщик берётся у продавца: код выдаёт тот, у кого товар лежал на складе.
+ */
 export async function enqueueDelivery(client: Client, orderId: string) {
   await client.query(
-    `insert into delivery_jobs (order_id) values ($1)
+    `insert into delivery_jobs (order_id, provider)
+     select o.id, coalesce(s.provider_id, 'a')
+       from orders o
+       left join offers f on f.id = o.offer_id
+       left join sellers s on s.id = f.seller_id
+      where o.id = $1
      on conflict (order_id) do nothing`,
     [orderId],
   )
@@ -146,4 +190,39 @@ export async function processParked(orderId?: string): Promise<number> {
     if (done) applied++
   }
   return applied
+}
+
+/**
+ * Оплаченные заказы, которым не досталось единицы склада. Повторяем перезахват,
+ * пока не получится: пополнили остаток — заказ сам поедет дальше.
+ *
+ * Заказы, у которых единица уже продана, а кода нет (пустой поставщик из первого
+ * этапа), сюда не попадают: их обслуживает очередь выдачи.
+ */
+export async function recoverStuck(limit = 20): Promise<number> {
+  const { rows } = await pool.query<{ id: string }>(
+    `select o.id from orders o
+      where o.status = 'out_of_stock'
+        and o.offer_id is not null
+        and not exists (select 1 from stock_units u where u.sold_order_id = o.id)
+      order by o.updated_at
+      limit $1`,
+    [limit],
+  )
+
+  let recovered = 0
+  for (const row of rows) {
+    const ok = await tx(async (client) => {
+      const order = await lockOrder(client, row.id)
+      if (!order || order.status !== 'out_of_stock') return false
+      const settled = await reservations.settlePaid(client, order)
+      if (!settled.ok) return false
+      await setStatus(client, order.id, 'paid', 'stock_recovered')
+      await enqueueDelivery(client, order.id)
+      await events.emit(client, settled.offerId)
+      return true
+    })
+    if (ok) recovered++
+  }
+  return recovered
 }

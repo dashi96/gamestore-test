@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -40,7 +41,12 @@ const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? 'info' } })
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 app.post('/issue', async (request, reply) => {
-  const body = (request.body ?? {}) as { request_id?: string; sku?: string; order_id?: string }
+  const body = (request.body ?? {}) as {
+    request_id?: string
+    sku?: string
+    order_id?: string
+    unit_ref?: string | null
+  }
   if (!body.request_id) return reply.code(400).send({ status: 'error', reason: 'request_id_required' })
   state.stats.requests++
 
@@ -58,10 +64,15 @@ app.post('/issue', async (request, reply) => {
     return reply.code(500).send({ status: 'error', reason: 'provider_error' })
   }
 
-  const code = state.stock.shift()
-  if (!code) {
+  // Остаток здесь — ёмкость, а не список: он по-прежнему кончается, и сценарий
+  // с опустошённым поставщиком продолжает работать. А вот личность кода задаёт
+  // склад магазина: по unit_ref всегда возвращается один и тот же код, поэтому
+  // разойтись «в базе есть, у поставщика нет» случайно уже нельзя.
+  const slot = state.stock.shift()
+  if (!slot) {
     return reply.code(409).send({ status: 'error', reason: 'out_of_stock' })
   }
+  const code = body.unit_ref ? codeForRef(body.unit_ref) : slot
 
   // Ключ израсходован и закреплён за request_id — до решения о «зависании».
   state.issued.set(body.request_id, code)
@@ -127,6 +138,13 @@ app.register(async (admin) => {
 })
 
 const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+
+/** Код, детерминированно закреплённый за единицей склада. */
+const codeForRef = (ref: string) => {
+  const digest = createHash('sha1').update(`${providerId}:${ref}`).digest()
+  const chars = Array.from({ length: 12 }, (_, i) => alphabet[digest[i]! % alphabet.length])
+  return `${chars.slice(0, 4).join('')}-${chars.slice(4, 8).join('')}-${chars.slice(8).join('')}`
+}
 const generateKey = () =>
   Array.from({ length: 3 }, () =>
     Array.from({ length: 4 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join(''),

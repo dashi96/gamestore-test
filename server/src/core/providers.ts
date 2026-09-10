@@ -11,7 +11,12 @@ export type IssueOutcome =
 
 export async function issue(
   provider: ProviderId,
-  payload: { request_id: string; sku: string; order_id: string },
+  /**
+   * unit_ref — слот кода, закреплённый за единицей склада. Поставщик обязан
+   * отдать по нему один и тот же код: тогда «база говорит доступно, а кода нет»
+   * не может возникнуть случайно, а не только не должно.
+   */
+  payload: { request_id: string; sku: string; order_id: string; unit_ref: string | null },
 ): Promise<IssueOutcome> {
   const url = `${config.providers[provider]}/issue`
   try {

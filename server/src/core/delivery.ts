@@ -4,6 +4,7 @@ import { tx } from '../lib/db.ts'
 import { requestIdFor } from '../lib/ids.ts'
 import { lockOrder, setStatus } from './orders.ts'
 import { issue } from './providers.ts'
+import { soldUnit } from './stock.ts'
 
 export type Job = {
   order_id: string
@@ -71,7 +72,9 @@ export async function runJob(job: Job): Promise<StepResult> {
     }
 
     await setStatus(client, order.id, 'delivering', null)
-    return { sku: order.sku }
+    // Единица, закреплённая за заказом продажей: из её слота поставщик берёт код.
+    const unit = await soldUnit(client, job.order_id)
+    return { sku: order.sku, unitRef: unit?.code_ref ?? null }
   })
 
   if (!prepared) return 'skipped'
@@ -81,6 +84,7 @@ export async function runJob(job: Job): Promise<StepResult> {
     request_id: requestId,
     sku: prepared.sku,
     order_id: job.order_id,
+    unit_ref: prepared.unitRef,
   })
 
   if (outcome.kind === 'ok') {
