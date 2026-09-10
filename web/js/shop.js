@@ -1,8 +1,12 @@
-import { ApiError, createOrder, getProducts, money, quotePromo, uuid } from './api.js'
+import { createOrder, money, quotePromo, request, uuid } from './api.js'
 import { initCarousel } from './carousel.js'
 import { initCatalog } from './catalog.js'
 import { initCurrency } from './currency.js'
+import { createGate } from './requests.js'
+import { applySnapshot, get, subscribe } from './store.js'
+import { connect } from './stream.js'
 import { toast } from './toast.js'
+import { cartBadge, liveBadge, errorText } from './ui.js'
 
 const SERVICES = [
   { name: 'Steam', image: 'assets/services/steam.png' },
@@ -24,26 +28,47 @@ const SLIDES = [
     background: 'linear-gradient(120deg, #0f1116 0%, #1d2a44 100%)',
   },
   {
-    title: 'Ключи со скидкой до 60%',
-    text: 'Каждый ключ выдаётся ровно один раз: он закрепляется за заказом в момент выдачи.',
+    title: 'Остаток на витрине настоящий',
+    text: 'Цена и наличие меняются в тот же момент, когда товар разбирают у продавца.',
     background: 'linear-gradient(120deg, #171018 0%, #4a1e3d 100%)',
   },
   {
-    title: 'Подписки без привязки карты',
-    text: 'Discord Nitro, YouTube Premium, Spotify — оплата в рублях.',
+    title: 'Бронь на 7 минут',
+    text: 'При оформлении товар закрепляется за вами, а на экране идёт обратный отсчёт.',
     background: 'linear-gradient(120deg, #101815 0%, #1f4536 100%)',
   },
   {
-    title: 'Гифт-карты PSN и Xbox',
-    text: 'Номиналы на любой регион, код приходит на страницу заказа.',
+    title: 'Несколько продавцов на один товар',
+    text: 'Раскупили у одного — на карточке товара сразу видно предложения остальных.',
     background: 'linear-gradient(120deg, #14121b 0%, #3a2a63 100%)',
   },
 ]
 
-const TABS = ['Донат', 'Подписки', 'Предметы', 'Аккаунты', 'Ключи', 'Игровая валюта', 'Другое']
+/** Вкладки соответствуют типам товаров: в первом этапе они были декоративными. */
+const TABS = [
+  { label: 'Все', type: null },
+  { label: 'Донат', type: 'topup' },
+  { label: 'Подписки', type: 'subscription' },
+  { label: 'Ключи', type: 'key' },
+  { label: 'Гифт-карты', type: 'giftcard' },
+  { label: 'Игровая валюта', type: 'currency' },
+]
 
 /** Промокод живёт в памяти страницы: на сервер уходит только его код. */
 let activePromo = null
+
+/** offer_id → карточка. Узлы не пересоздаются, меняется только то, что изменилось. */
+const cards = new Map()
+
+/**
+ * Состояние поиска целиком лежит в адресе страницы: по прямой ссылке
+ * открывается ровно та же выдача (пункт 5.3 ТЗ).
+ */
+const filters = { q: '', type: null, min: null, max: null, sort: null }
+
+const gate = createGate()
+let inFlight = null
+let debounce = null
 
 init()
 
@@ -52,7 +77,6 @@ async function init() {
     button: document.getElementById('catalog-btn'),
     menu: document.getElementById('catalog-menu'),
   })
-
   initCarousel({
     track: document.getElementById('banner-track'),
     dots: document.getElementById('banner-dots'),
@@ -60,20 +84,121 @@ async function init() {
     next: document.getElementById('banner-next'),
     slides: SLIDES,
   })
-
   initCurrency(document.getElementById('currency'))
   renderServices()
   renderTabs()
   initPromo()
+  cartBadge()
 
-  document.getElementById('topup-buy').addEventListener('click', (event) => buy(event.currentTarget))
+  document.getElementById('topup-buy').addEventListener('click', (event) => buyBySku(event.currentTarget))
+
+  readFilters()
+  initFilters()
+  selectTab()
+  connect(liveBadge(), () => search({ immediate: true }))
+  subscribe(repaint)
+  search({ immediate: true })
+}
+
+function readFilters() {
+  const params = new URLSearchParams(location.search)
+  filters.q = params.get('q') ?? ''
+  filters.type = params.get('type') || null
+  filters.min = params.get('min') || null
+  filters.max = params.get('max') || null
+  filters.sort = params.get('sort') || null
+}
+
+function writeFilters() {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(filters)) if (value) params.set(key, value)
+  const query = params.toString()
+  // replaceState, а не pushState: набор запроса побуквенно не должен забивать
+  // историю браузера — «Назад» обязан вести на предыдущую страницу.
+  history.replaceState(null, '', query ? `?${query}` : location.pathname)
+}
+
+/**
+ * Запуск поиска. Пауза перед отправкой гасит побуквенный шквал, отмена
+ * освобождает соединение, но решает не она: устаревший ответ отбрасывается по
+ * номеру талона. Отмена не мгновенна, и ответ на отменённый запрос вполне может
+ * дойти — тогда без талона он перетёр бы более свежий.
+ */
+function search({ immediate = false } = {}) {
+  writeFilters()
+  clearTimeout(debounce)
+  debounce = setTimeout(run, immediate ? 0 : 150)
+}
+
+async function run() {
+  inFlight?.abort()
+  const controller = new AbortController()
+  inFlight = controller
+  const ticket = gate.next()
+
+  const params = new URLSearchParams({ limit: '24' })
+  if (filters.q) params.set('q', filters.q)
+  if (filters.type) params.set('type', filters.type)
+  if (filters.min) params.set('min', filters.min)
+  if (filters.max) params.set('max', filters.max)
+  if (filters.sort) params.set('sort', filters.sort)
 
   try {
-    const { products } = await getProducts()
-    renderCards(products.filter((p) => p.type === 'key' || p.type === 'giftcard').slice(0, 5))
-  } catch {
+    const snapshot = await request(`/api/catalog?${params}`, { signal: controller.signal })
+    if (!gate.accept(ticket)) return
+    applySnapshot(snapshot)
+    renderCards(snapshot.offers)
+    showFound(snapshot.total)
+  } catch (error) {
+    if (error.name === 'AbortError') return
     toast('Не удалось загрузить каталог', 'error')
   }
+}
+
+function showFound(total) {
+  const active = filters.q || filters.type || filters.min || filters.max
+  document.getElementById('found').textContent = active ? `Найдено: ${total}` : ''
+  document.getElementById('cards-title').textContent = filters.q
+    ? `Результаты по запросу «${filters.q}»`
+    : 'Популярные товары'
+}
+
+function initFilters() {
+  const input = document.getElementById('search-input')
+  const min = document.getElementById('f-min')
+  const max = document.getElementById('f-max')
+  const sort = document.getElementById('f-sort')
+
+  input.value = filters.q
+  min.value = filters.min ?? ''
+  max.value = filters.max ?? ''
+  sort.value = filters.sort ?? ''
+
+  input.addEventListener('input', () => {
+    filters.q = input.value.trim()
+    search()
+  })
+  for (const [node, key] of [[min, 'min'], [max, 'max']]) {
+    node.addEventListener('input', () => {
+      filters[key] = node.value.trim() || null
+      search()
+    })
+  }
+  sort.addEventListener('change', () => {
+    filters.sort = sort.value || null
+    search({ immediate: true })
+  })
+  document.getElementById('f-reset').addEventListener('click', () => {
+    Object.assign(filters, { q: '', type: null, min: null, max: null, sort: null })
+    input.value = ''
+    min.value = ''
+    max.value = ''
+    sort.value = ''
+    for (const item of document.getElementById('tabs').children) {
+      item.setAttribute('aria-selected', String(item === document.getElementById('tabs').firstElementChild))
+    }
+    search({ immediate: true })
+  })
 }
 
 function renderServices() {
@@ -96,59 +221,120 @@ function renderServices() {
 function renderTabs() {
   const host = document.getElementById('tabs')
   host.innerHTML = TABS.map(
-    (tab, i) =>
-      `<button class="tab" role="tab" aria-selected="${i === 0}">${tab}</button>`,
+    (tab, i) => `<button class="tab" role="tab" aria-selected="${i === 0}">${tab.label}</button>`,
   ).join('')
 
   host.addEventListener('click', (event) => {
     const tab = event.target.closest('.tab')
     if (!tab) return
     for (const item of host.children) item.setAttribute('aria-selected', String(item === tab))
+    filters.type = TABS[[...host.children].indexOf(tab)].type
+    search({ immediate: true })
   })
 }
 
-function renderCards(products) {
-  const host = document.getElementById('cards')
-  host.innerHTML = products
-    .map(
-      (product) => `
-      <article class="card">
-        <div class="card__cover"><img src="${product.image}" alt="" loading="lazy" /></div>
-        <div class="card__name">${product.name}</div>
-        <div class="card__price">
-          <b>${money(product.price_rub)}</b>
-          <s>${money(Math.round((product.price_rub * 1.6) / 10) * 10)}</s>
-        </div>
-        <button class="btn-primary" data-sku="${product.sku}">Купить</button>
-      </article>`,
-    )
-    .join('')
-
-  host.addEventListener('click', (event) => {
-    const button = event.target.closest('button[data-sku]')
-    if (button) buy(button)
-  })
+/** Вкладка, соответствующая типу из адреса: прямая ссылка открывает её выбранной. */
+function selectTab() {
+  const host = document.getElementById('tabs')
+  const index = Math.max(TABS.findIndex((tab) => tab.type === filters.type), 0)
+  for (const [i, item] of [...host.children].entries()) {
+    item.setAttribute('aria-selected', String(i === index))
+  }
 }
 
 /**
- * Покупка. Ключ идемпотентности выдаётся один на кнопку и не меняется до
- * ответа сервера: пока запрос в полёте, кнопка заблокирована, а если клик
- * всё-таки прошёл дважды — сервер вернёт тот же самый заказ.
+ * Карточки собираются один раз, дальше только правятся. Пересборка списка
+ * целиком — это мигание, которого ТЗ прямо просит избежать.
  */
-async function buy(button) {
+function renderCards(offers) {
+  const host = document.getElementById('cards')
+  const next = new Set(offers.map((offer) => offer.offer_id))
+
+  // Заглушка «ничего не нашлось» — текстовый узел; убираем, иначе карточки
+  // лягут после неё.
+  for (const node of [...host.childNodes]) if (node.nodeType === Node.TEXT_NODE) node.remove()
+
+  // Ушедшие из выдачи убираем, оставшиеся переиспользуем. Карточка привязана к
+  // предложению по id, поэтому чужих данных в ней оказаться не может.
+  for (const [id, node] of cards) {
+    if (next.has(id)) continue
+    node.remove()
+    cards.delete(id)
+  }
+
+  // Переставляем только то, что реально не на своём месте. Безусловный append
+  // тоже переиспользует узлы, но трогает DOM на каждой букве, хотя выдача могла
+  // не измениться вовсе.
+  let previous = null
+  for (const offer of offers) {
+    let card = cards.get(offer.offer_id)
+    if (!card) {
+      card = createCard(offer)
+      cards.set(offer.offer_id, card)
+    }
+    const expected = previous ? previous.nextSibling : host.firstChild
+    if (card !== expected) host.insertBefore(card, expected)
+    previous = card
+    paint(offer.offer_id)
+  }
+
+  host.classList.toggle('cards--empty', offers.length === 0)
+  if (!offers.length) host.textContent = 'Ничего не нашлось. Попробуйте изменить запрос или фильтры.'
+}
+
+function createCard(offer) {
+  const link = `product.html?sku=${encodeURIComponent(offer.sku)}`
+  const card = document.createElement('article')
+  card.className = 'card'
+  card.innerHTML = `
+    <a class="card__cover" href="${link}"><img src="${offer.image}" alt="" loading="lazy" /></a>
+    <a class="card__name" href="${link}">${offer.name}</a>
+    <div class="card__seller"></div>
+    <div class="card__price"><b></b><s></s></div>
+    <div class="card__stock"></div>
+    <a class="btn-primary card__buy" href="${link}">Купить</a>`
+  return card
+}
+
+function repaint(changed) {
+  changed.forEach(paint)
+}
+
+function paint(offerId) {
+  const card = cards.get(offerId)
+  const offer = get(offerId)
+  if (!card || !offer) return
+
+  const sold = offer.available === 0
+  card.querySelector('.card__seller').textContent =
+    offer.sellers > 1 ? `${offer.seller_name} и ещё ${offer.sellers - 1}` : offer.seller_name
+  card.querySelector('.card__price b').textContent = money(offer.price_rub)
+  card.querySelector('.card__price s').textContent = money(Math.round((offer.price_rub * 1.6) / 10) * 10)
+  card.querySelector('.card__stock').textContent = sold ? 'Нет в наличии' : `В наличии: ${offer.available}`
+  card.querySelector('.card__stock').dataset.sold = String(sold)
+
+  const buy = card.querySelector('.card__buy')
+  buy.textContent = sold ? 'Раскупили' : 'Купить'
+  buy.classList.toggle('is-disabled', sold)
+  // Ссылку у распроданного товара не убираем: на карточке товара видно
+  // остальных продавцов, и туда попасть по-прежнему можно.
+}
+
+
+/** Путь первого этапа: покупка по товару, продавца выбирает сервер. */
+async function buyBySku(button) {
   if (button.dataset.busy === 'true') return
   button.dataset.busy = 'true'
   button.disabled = true
   const label = button.textContent
   button.textContent = 'Создаём заказ…'
-
   button.dataset.idempotencyKey ??= uuid()
 
   try {
-    const order = await createOrder(button.dataset.sku, {
-      idempotencyKey: button.dataset.idempotencyKey,
-      promoCode: activePromo,
-    })
+    const order = await createOrder(
+      { sku: button.dataset.sku },
+      { idempotencyKey: button.dataset.idempotencyKey, promoCode: activePromo },
+    )
     location.href = `order.html?id=${encodeURIComponent(order.id)}`
   } catch (error) {
     button.dataset.idempotencyKey = uuid() // неудачная попытка — новый ключ
@@ -182,7 +368,7 @@ function initPromo() {
       // Предпросмотр считает сервер: клиент не знает ни цен, ни правил скидок.
       const quote = await quotePromo(code, 'STEAM-TOPUP-500')
       activePromo = quote.code
-      toast(`Промокод ${quote.code} применится к следующей покупке: −${money(quote.discount)} на пополнение 500 ₽`)
+      toast(`Промокод ${quote.code} применится к следующей покупке: −${money(quote.discount)}`)
     } catch (error) {
       activePromo = null
       toast(errorText(error), 'error')
@@ -191,15 +377,4 @@ function initPromo() {
 
   apply.addEventListener('click', check)
   input.addEventListener('keydown', (event) => event.key === 'Enter' && check())
-}
-
-function errorText(error) {
-  if (!(error instanceof ApiError)) return 'Что-то пошло не так'
-  return (
-    {
-      promo_not_found: 'Промокод не найден',
-      promo_limit_reached: 'Лимит промокода исчерпан',
-      unknown_sku: 'Товар недоступен',
-    }[error.code] ?? error.message
-  )
 }

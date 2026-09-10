@@ -23,6 +23,84 @@ document.getElementById('reset').addEventListener('click', async () => {
   refresh()
 })
 
+/**
+ * Витрина под управлением: цена и остаток любого предложения.
+ *
+ * Ровно этими двумя ручками показывается пункт 1 ТЗ — изменение видно во всех
+ * открытых вкладках сразу. Список не перезагружается по таймеру, чтобы не сбивать
+ * ввод: обновляется он по нажатию и после каждого изменения.
+ */
+document.getElementById('offer-find').addEventListener('click', findOffers)
+document.getElementById('offer-search').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') findOffers()
+})
+
+async function findOffers() {
+  const query = document.getElementById('offer-search').value.trim()
+  const hint = document.getElementById('offer-hint')
+  if (!query) {
+    hint.textContent = 'Введите часть названия'
+    return
+  }
+  const catalog = await request(`/api/catalog?q=${encodeURIComponent(query)}&limit=8`)
+  hint.textContent = `Найдено товаров: ${catalog.total}`
+
+  const rows = await Promise.all(
+    catalog.offers.map(async (offer) => {
+      const { offers } = await admin(`/admin/offers?sku=${encodeURIComponent(offer.sku)}`)
+      return offers.map((row) => ({ ...row, name: offer.name }))
+    }),
+  )
+
+  renderOffers(rows.flat())
+}
+
+function renderOffers(offers) {
+  const table = document.getElementById('offers')
+  table.innerHTML = `
+    <tr><th>Товар</th><th>Продавец</th><th>Цена</th><th>Свободно</th><th></th></tr>
+    ${offers
+      .map(
+        (offer) => `
+      <tr>
+        <td>${offer.name}</td>
+        <td>${offer.seller_name}</td>
+        <td><input class="price" data-id="${offer.id}" type="number" value="${offer.price_rub}" size="7" /></td>
+        <td>${offer.free} из ${offer.units}</td>
+        <td class="actions">
+          <button class="btn-ghost" data-act="price" data-id="${offer.id}">Изменить цену</button>
+          <button class="btn-ghost" data-act="stock" data-id="${offer.id}">+3 единицы</button>
+        </td>
+      </tr>`,
+      )
+      .join('')}`
+}
+
+// Один делегированный обработчик на таблицу: строки перерисовываются, он живёт.
+document.getElementById('offers').addEventListener('click', onOfferAction)
+
+async function onOfferAction(event) {
+  const button = event.target.closest('button[data-act]')
+  if (!button) return
+  const id = Number(button.dataset.id)
+  try {
+    if (button.dataset.act === 'price') {
+      const input = document.querySelector(`.price[data-id="${id}"]`)
+      const result = await admin(`/admin/offers/${id}/price`, {
+        method: 'POST',
+        body: { price_rub: Number(input.value) },
+      })
+      toast(`Цена обновлена: ${money(result.price_rub)} — событие ${result.seq} ушло подписчикам`)
+    } else {
+      const result = await admin(`/admin/offers/${id}/stock`, { method: 'POST', body: { count: 3 } })
+      toast(`Долито 3 единицы — событие ${result.seq} ушло подписчикам`)
+    }
+    await findOffers()
+  } catch (error) {
+    toast(error.message, 'error')
+  }
+}
+
 async function refresh() {
   try {
     const [orders, providers, stats] = await Promise.all([
